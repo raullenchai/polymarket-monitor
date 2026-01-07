@@ -676,6 +676,10 @@ class AlertNotifier:
                 "critical": "red"
             }.get(alert.severity, "blue")
 
+            # Get outcome and price from alert details
+            outcome = alert.details.get('outcome', 'N/A')
+            price = alert.details.get('price', 0)
+
             # Build interactive card
             card = {
                 "msg_type": "interactive",
@@ -717,10 +721,22 @@ class AlertNotifier:
                         },
                         {
                             "tag": "div",
-                            "text": {
-                                "tag": "lark_md",
-                                "content": f"**Wallet**\n`{alert.wallet}`"
-                            }
+                            "fields": [
+                                {
+                                    "is_short": True,
+                                    "text": {
+                                        "tag": "lark_md",
+                                        "content": f"**Bet**\n{outcome} @ {price:.2f}" if price else f"**Bet**\n{outcome}"
+                                    }
+                                },
+                                {
+                                    "is_short": True,
+                                    "text": {
+                                        "tag": "lark_md",
+                                        "content": f"**Wallet**\n`{alert.wallet}`"
+                                    }
+                                }
+                            ]
                         },
                         {
                             "tag": "hr"
@@ -735,7 +751,7 @@ class AlertNotifier:
                                         "content": "View on Polymarket"
                                     },
                                     "type": "primary",
-                                    "url": market_url or f"https://polymarket.com"
+                                    "url": market_url or "https://polymarket.com"
                                 }
                             ]
                         }
