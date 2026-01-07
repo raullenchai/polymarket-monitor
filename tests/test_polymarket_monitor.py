@@ -1370,3 +1370,105 @@ class TestLarkNotificationAmountFallback:
                     content = field.get('text', {}).get('content', '')
                     if '**Amount**' in content:
                         assert '$0' in content, f"Expected $0 in content, got: {content}"
+
+
+class TestSkipResolvedPrices:
+    """Test that trades at near-resolved prices are filtered out"""
+
+    def test_skip_high_price_trade(self, mock_client):
+        """Trades at price >= 0.95 should be skipped"""
+        detector = AnomalyDetector(mock_client)
+        
+        # Trade at price 0.99 - should be skipped
+        trade = Trade(
+            id="resolved_001",
+            market_id="market_123",
+            market_slug="fed-rate-market",
+            wallet="0xnewwallet123",
+            side="buy",
+            outcome="No",
+            amount_usd=15000.0,  # Would normally trigger alerts
+            price=0.99,
+            timestamp=datetime.now(),
+        )
+        
+        alerts = detector.analyze_trade(trade)
+        assert len(alerts) == 0, "Trades at 0.99 price should be skipped"
+
+    def test_skip_low_price_trade(self, mock_client):
+        """Trades at price <= 0.05 should be skipped"""
+        detector = AnomalyDetector(mock_client)
+        
+        # Trade at price 0.03 - should be skipped
+        trade = Trade(
+            id="resolved_002",
+            market_id="market_123",
+            market_slug="fed-rate-market",
+            wallet="0xnewwallet456",
+            side="buy",
+            outcome="Yes",
+            amount_usd=15000.0,
+            price=0.03,
+            timestamp=datetime.now(),
+        )
+        
+        alerts = detector.analyze_trade(trade)
+        assert len(alerts) == 0, "Trades at 0.03 price should be skipped"
+
+    def test_normal_price_not_skipped(self, mock_client):
+        """Trades at normal prices should still trigger alerts"""
+        detector = AnomalyDetector(mock_client)
+        
+        # Trade at price 0.50 - should NOT be skipped
+        trade = Trade(
+            id="normal_001",
+            market_id="market_123",
+            market_slug="fed-rate-market",
+            wallet="0xnewwallet789",
+            side="buy",
+            outcome="Yes",
+            amount_usd=15000.0,
+            price=0.50,
+            timestamp=datetime.now(),
+        )
+        
+        alerts = detector.analyze_trade(trade)
+        assert len(alerts) > 0, "Trades at normal prices should trigger alerts"
+
+    def test_boundary_price_095_skipped(self, mock_client):
+        """Trades at exactly 0.95 should be skipped"""
+        detector = AnomalyDetector(mock_client)
+        
+        trade = Trade(
+            id="boundary_001",
+            market_id="market_123",
+            market_slug="fed-rate-market",
+            wallet="0xboundarywallet",
+            side="buy",
+            outcome="No",
+            amount_usd=15000.0,
+            price=0.95,
+            timestamp=datetime.now(),
+        )
+        
+        alerts = detector.analyze_trade(trade)
+        assert len(alerts) == 0, "Trades at exactly 0.95 should be skipped"
+
+    def test_boundary_price_094_not_skipped(self, mock_client):
+        """Trades at 0.94 should NOT be skipped"""
+        detector = AnomalyDetector(mock_client)
+        
+        trade = Trade(
+            id="boundary_002",
+            market_id="market_123",
+            market_slug="fed-rate-market",
+            wallet="0xboundarywallet2",
+            side="buy",
+            outcome="Yes",
+            amount_usd=15000.0,
+            price=0.94,
+            timestamp=datetime.now(),
+        )
+        
+        alerts = detector.analyze_trade(trade)
+        assert len(alerts) > 0, "Trades at 0.94 should NOT be skipped"

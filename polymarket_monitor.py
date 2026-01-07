@@ -89,6 +89,9 @@ CONFIG = {
     "REPEAT_ENTRY_WINDOW_HOURS": 24,       # Time window for repeat detection
     "WALLET_AGE_THRESHOLD_DAYS": 7,        # Wallet younger than this = "new wallet"
 
+    # Skip trades at near-resolved prices (likely position closings, not real signals)
+    "SKIP_RESOLVED_PRICE_THRESHOLD": 0.95, # Skip if price >= 0.95 (or <= 0.05)
+
     # Monitoring interval
     "POLL_INTERVAL_SECONDS": 30,
 
@@ -443,6 +446,12 @@ class AnomalyDetector:
 
         # Skip already processed trades (using persistent storage)
         if not self.seen_trades.add(trade.id):
+            return alerts
+
+        # Skip trades at near-resolved prices (position closings, not real signals)
+        # Price >= 0.95 means outcome is ~certain, price <= 0.05 means opposite is ~certain
+        threshold = CONFIG["SKIP_RESOLVED_PRICE_THRESHOLD"]
+        if trade.price >= threshold or trade.price <= (1 - threshold):
             return alerts
 
         # Record trade history
@@ -815,6 +824,7 @@ class PolymarketMonitor:
         print(line(f"New wallet threshold:    ${CONFIG['NEW_WALLET_THRESHOLD_USD']:,}"))
         print(line(f"Large bet threshold:     ${CONFIG['LARGE_BET_THRESHOLD_USD']:,}"))
         print(line(f"Repeat entry threshold:  {CONFIG['REPEAT_ENTRY_COUNT']} trades / {CONFIG['REPEAT_ENTRY_WINDOW_HOURS']} hours"))
+        print(line(f"Skip resolved prices:    >= {CONFIG['SKIP_RESOLVED_PRICE_THRESHOLD']:.2f} or <= {1-CONFIG['SKIP_RESOLVED_PRICE_THRESHOLD']:.2f}"))
         print(line(f"Poll interval:           {CONFIG['POLL_INTERVAL_SECONDS']} seconds"))
         print(line(f"Rate limit:              {CONFIG['RATE_LIMIT_RPS']} req/s (burst: {CONFIG['RATE_LIMIT_BURST']})"))
         print("╚" + "═" * (w-2) + "╝")
@@ -1002,6 +1012,7 @@ def main():
     parser.add_argument("--interval", type=int, default=30, help="Polling interval (seconds)")
     parser.add_argument("--num-markets", type=int, default=50, help="Number of markets to monitor (by volume, default 50)")
     parser.add_argument("--max-days", type=int, default=30, help="Only monitor markets ending within N days (default 30)")
+    parser.add_argument("--skip-resolved", type=float, default=0.95, help="Skip trades at price >= N or <= 1-N (default 0.95, set to 1.0 to disable)")
     parser.add_argument("--log-file", type=str, default="trades.log", help="Trade log file path (default: trades.log)")
     parser.add_argument("--webhook", type=str, help="Discord/Slack Webhook URL")
     parser.add_argument("--telegram-token", type=str, help="Telegram Bot Token")
@@ -1020,6 +1031,7 @@ def main():
     CONFIG["NEW_WALLET_THRESHOLD_USD"] = args.min_amount
     CONFIG["LARGE_BET_THRESHOLD_USD"] = args.large_bet
     CONFIG["POLL_INTERVAL_SECONDS"] = args.interval
+    CONFIG["SKIP_RESOLVED_PRICE_THRESHOLD"] = args.skip_resolved
 
     # Telegram config
     telegram_config = None
