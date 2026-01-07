@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Polymarket 异常交易监控脚本 (老鼠仓检测)
-=========================================
-检测指标:
-1. 新钱包 - 无历史记录的钱包突然大额下注
-2. 大额异常 - 单笔交易金额远超该市场平均
-3. 重复进场 - 同一钱包在窄市场反复加仓
-4. 时间异常 - 在重大事件前的集中买入
+Polymarket Abnormal Trade Monitor
+=================================
+Detection methods:
+1. New wallet - Wallets with no history suddenly placing large bets
+2. Large trade - Single trade amount far exceeds market average
+3. Repeat entry - Same wallet repeatedly entering the same market
+4. Timing anomaly - Concentrated buying before major events
 
-使用方法:
+Usage:
     python polymarket_monitor.py --min-amount 1000 --alert-webhook <your_webhook>
 """
 
@@ -72,7 +72,7 @@ def setup_logging(log_file: str = "trades.log"):
 # Global logger (will be reconfigured in main() if custom path provided)
 trade_logger = setup_logging()
 
-# ============ 配置 ============
+# ============ Configuration ============
 CONFIG = {
     # Polymarket API endpoints (verified against official docs)
     # See: https://docs.polymarket.com/quickstart/reference/endpoints
@@ -80,15 +80,15 @@ CONFIG = {
     "GAMMA_API": "https://gamma-api.polymarket.com",
     "DATA_API": "https://data-api.polymarket.com",
 
-    # 检测阈值
-    "NEW_WALLET_THRESHOLD_USD": 5000,      # 新钱包下注超过此金额触发警报
-    "LARGE_BET_THRESHOLD_USD": 10000,      # 大额交易阈值
-    "LARGE_BET_MULTIPLIER": 5,             # 交易金额超过市场平均X倍视为异常
-    "REPEAT_ENTRY_COUNT": 3,               # 同市场重复进场次数阈值
-    "REPEAT_ENTRY_WINDOW_HOURS": 24,       # 重复进场检测时间窗口
-    "WALLET_AGE_THRESHOLD_DAYS": 7,        # 钱包年龄小于此天数视为"新钱包"
+    # Detection thresholds
+    "NEW_WALLET_THRESHOLD_USD": 5000,      # New wallet bet threshold for alert
+    "LARGE_BET_THRESHOLD_USD": 10000,      # Large trade threshold
+    "LARGE_BET_MULTIPLIER": 5,             # Trade amount exceeding Xx market avg = anomaly
+    "REPEAT_ENTRY_COUNT": 3,               # Repeat entry count threshold
+    "REPEAT_ENTRY_WINDOW_HOURS": 24,       # Time window for repeat detection
+    "WALLET_AGE_THRESHOLD_DAYS": 7,        # Wallet younger than this = "new wallet"
 
-    # 监控间隔
+    # Monitoring interval
     "POLL_INTERVAL_SECONDS": 30,
 
     # Rate limiting (requests per second)
@@ -102,7 +102,7 @@ CONFIG = {
     # Market filtering
     "MAX_END_DAYS": 30,                    # Only monitor markets ending within N days
 
-    # 关注的市场类别 (政治类通常信息不对称更严重)
+    # Focus categories (politics often has more information asymmetry)
     "FOCUS_CATEGORIES": ["politics", "elections", "government"],
 }
 
@@ -214,10 +214,10 @@ class SeenTradesStore:
         return len(self.data)
 
 
-# ============ 数据结构 ============
+# ============ Data Structures ============
 @dataclass
 class Trade:
-    """交易记录"""
+    """Trade record"""
     id: str
     market_id: str
     market_slug: str
@@ -230,7 +230,7 @@ class Trade:
     
 @dataclass
 class Alert:
-    """警报"""
+    """Alert record"""
     type: str  # "new_wallet", "large_bet", "repeat_entry", "timing_anomaly"
     severity: str  # "low", "medium", "high", "critical"
     wallet: str
@@ -249,9 +249,9 @@ class Alert:
             "time": self.timestamp.isoformat()
         }
 
-# ============ API 客户端 ============
+# ============ API Client ============
 class PolymarketClient:
-    """Polymarket API 客户端 with rate limiting"""
+    """Polymarket API client with rate limiting"""
 
     def __init__(self, rate_limiter: RateLimiter = None):
         self.session = requests.Session()
@@ -268,7 +268,7 @@ class PolymarketClient:
 
     def get_markets(self, limit=100, active_only=True, sort_by_volume=False,
                     max_end_days: int = None) -> list:
-        """获取市场列表 via Gamma API (both events and standalone markets)
+        """Get market list via Gamma API (both events and standalone markets)
 
         Args:
             limit: Maximum number of markets to return
@@ -322,7 +322,7 @@ class PolymarketClient:
             all_markets = unique_markets
 
         except Exception as e:
-            print(f"[ERROR] 获取市场列表失败: {e}")
+            print(f"[ERROR] Failed to get markets: {e}")
             return []
 
         # Filter by end date if specified
@@ -356,7 +356,7 @@ class PolymarketClient:
         return all_markets[:limit]
 
     def get_market_trades(self, token_id: str, limit=100) -> list:
-        """获取特定token的最近交易 - DEPRECATED, use get_recent_trades instead"""
+        """Get recent trades for a specific token - DEPRECATED, use get_recent_trades instead"""
         # Note: Data API doesn't filter by token_id properly
         # This method is kept for compatibility but may return unfiltered results
         try:
@@ -367,33 +367,33 @@ class PolymarketClient:
             # Client-side filter by asset
             return [t for t in trades if t.get('asset') == token_id]
         except Exception as e:
-            print(f"[ERROR] 获取交易记录失败 (token={token_id}): {e}")
+            print(f"[ERROR] Failed to get trades (token={token_id}): {e}")
             return []
 
     def get_recent_trades(self, limit=500) -> list:
-        """获取最近交易 (all markets) via Data API"""
+        """Get recent trades (all markets) via Data API"""
         try:
             params = {"limit": limit}
             resp = self._request("GET", f"{CONFIG['DATA_API']}/trades", params=params)
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
-            print(f"[ERROR] 获取交易记录失败: {e}")
+            print(f"[ERROR] Failed to get trades: {e}")
             return []
 
     def get_market_info(self, condition_id: str) -> dict:
-        """获取市场详情 via Gamma API"""
+        """Get market details via Gamma API"""
         try:
             # Gamma API: /markets/{id}
             resp = self._request("GET", f"{CONFIG['GAMMA_API']}/markets/{condition_id}")
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
-            print(f"[ERROR] 获取市场信息失败: {e}")
+            print(f"[ERROR] Failed to get market info: {e}")
             return {}
 
     def get_wallet_history(self, wallet: str) -> dict:
-        """获取钱包历史 (用于判断是否为新钱包) via Data API"""
+        """Get wallet history (to determine if wallet is new) via Data API"""
         try:
             # Data API: /positions endpoint for user positions
             # See: https://docs.polymarket.com/quickstart/reference/endpoints
@@ -410,11 +410,11 @@ class PolymarketClient:
                 "total_volume": sum(float(p.get("value", 0) or 0) for p in positions)
             }
         except Exception as e:
-            # 如果查询失败，假设是新钱包
+            # If query fails, assume it's a new wallet
             return {"first_seen": None, "total_trades": 0, "total_volume": 0}
 
     def get_last_trade_price(self, token_id: str) -> Optional[float]:
-        """获取最近成交价 via CLOB API"""
+        """Get last trade price via CLOB API"""
         try:
             resp = self._request("GET", f"{CONFIG['CLOB_API']}/last-trade-price",
                                  params={"token_id": token_id})
@@ -423,58 +423,58 @@ class PolymarketClient:
         except Exception:
             return None
 
-# ============ 检测引擎 ============
+# ============ Detection Engine ============
 class AnomalyDetector:
-    """异常检测引擎"""
+    """Anomaly detection engine"""
 
     def __init__(self, client: PolymarketClient, seen_trades_store: SeenTradesStore = None):
         self.client = client
-        self.wallet_cache = {}  # 钱包信息缓存
-        self.market_stats = {}  # 市场统计缓存
-        self.trade_history = defaultdict(list)  # 钱包交易历史
-        self.seen_trades = seen_trades_store or SeenTradesStore()  # 持久化的已处理交易ID
+        self.wallet_cache = {}  # Wallet info cache
+        self.market_stats = {}  # Market statistics cache
+        self.trade_history = defaultdict(list)  # Wallet trade history
+        self.seen_trades = seen_trades_store or SeenTradesStore()  # Persistent processed trade IDs
         self.alerts = []
 
     def analyze_trade(self, trade: Trade) -> list[Alert]:
-        """分析单笔交易，返回触发的警报列表"""
+        """Analyze a single trade and return list of triggered alerts"""
         alerts = []
 
-        # 跳过已处理的交易 (使用持久化存储)
+        # Skip already processed trades (using persistent storage)
         if not self.seen_trades.add(trade.id):
             return alerts
-        
-        # 记录交易历史
+
+        # Record trade history
         self.trade_history[trade.wallet].append(trade)
-        
-        # 检测1: 新钱包大额下注
+
+        # Detection 1: New wallet large bet
         new_wallet_alert = self._check_new_wallet(trade)
         if new_wallet_alert:
             alerts.append(new_wallet_alert)
-        
-        # 检测2: 异常大额交易
+
+        # Detection 2: Abnormally large trade
         large_bet_alert = self._check_large_bet(trade)
         if large_bet_alert:
             alerts.append(large_bet_alert)
-        
-        # 检测3: 重复进场
+
+        # Detection 3: Repeat entry
         repeat_alert = self._check_repeat_entry(trade)
         if repeat_alert:
             alerts.append(repeat_alert)
-        
+
         return alerts
-    
+
     def _check_new_wallet(self, trade: Trade) -> Optional[Alert]:
-        """检测新钱包大额下注"""
+        """Detect new wallet large bets"""
         if trade.amount_usd < CONFIG["NEW_WALLET_THRESHOLD_USD"]:
             return None
         
-        # 获取或缓存钱包信息
+        # Get or cache wallet info
         if trade.wallet not in self.wallet_cache:
             self.wallet_cache[trade.wallet] = self.client.get_wallet_history(trade.wallet)
-        
+
         wallet_info = self.wallet_cache[trade.wallet]
-        
-        # 判断是否为新钱包
+
+        # Determine if wallet is new
         is_new = False
         if wallet_info["first_seen"] is None:
             is_new = True
@@ -501,16 +501,16 @@ class AnomalyDetector:
                     "outcome": trade.outcome,
                     "price": trade.price,
                     "wallet_age_trades": wallet_info["total_trades"],
-                    "message": f"🚨 新钱包大额下注! ${trade.amount_usd:,.0f} on {trade.outcome} @ {trade.price:.2f}"
+                    "message": f"🚨 New wallet large bet! ${trade.amount_usd:,.0f} on {trade.outcome} @ {trade.price:.2f}"
                 }
             )
         return None
     
     def _check_large_bet(self, trade: Trade) -> Optional[Alert]:
-        """检测异常大额交易"""
-        # 获取市场平均交易额
+        """Detect abnormally large trades"""
+        # Get market average trade amount
         if trade.market_id not in self.market_stats:
-            self.market_stats[trade.market_id] = {"avg_trade": 500, "count": 0}  # 默认值
+            self.market_stats[trade.market_id] = {"avg_trade": 500, "count": 0}  # Default
         
         stats = self.market_stats[trade.market_id]
         threshold = max(
@@ -532,24 +532,24 @@ class AnomalyDetector:
                     "multiplier": trade.amount_usd / max(stats["avg_trade"], 1),
                     "outcome": trade.outcome,
                     "price": trade.price,
-                    "message": f"💰 大额交易! ${trade.amount_usd:,.0f} ({trade.amount_usd/max(stats['avg_trade'],1):.1f}x 市场平均)"
+                    "message": f"💰 Large trade! ${trade.amount_usd:,.0f} ({trade.amount_usd/max(stats['avg_trade'],1):.1f}x market avg)"
                 }
             )
         
-        # 更新市场统计
+        # Update market statistics
         stats["avg_trade"] = (stats["avg_trade"] * stats["count"] + trade.amount_usd) / (stats["count"] + 1)
         stats["count"] += 1
-        
+
         return None
-    
+
     def _check_repeat_entry(self, trade: Trade) -> Optional[Alert]:
-        """检测重复进场"""
+        """Detect repeat entries"""
         window = timedelta(hours=CONFIG["REPEAT_ENTRY_WINDOW_HOURS"])
         # Use timezone-aware datetime if trade.timestamp has timezone
         now = datetime.now(trade.timestamp.tzinfo) if trade.timestamp.tzinfo else datetime.now()
         cutoff = now - window
 
-        # 获取该钱包在此市场的近期交易
+        # Get recent trades from this wallet in this market
         recent_trades = [
             t for t in self.trade_history[trade.wallet]
             if t.market_id == trade.market_id and t.timestamp > cutoff
@@ -568,14 +568,14 @@ class AnomalyDetector:
                     "trade_count": len(recent_trades),
                     "total_amount": total_amount,
                     "window_hours": CONFIG["REPEAT_ENTRY_WINDOW_HOURS"],
-                    "message": f"🔄 重复进场! {len(recent_trades)}笔交易 共${total_amount:,.0f} 在{CONFIG['REPEAT_ENTRY_WINDOW_HOURS']}小时内"
+                    "message": f"🔄 Repeat entry! {len(recent_trades)} trades totaling ${total_amount:,.0f} in {CONFIG['REPEAT_ENTRY_WINDOW_HOURS']} hours"
                 }
             )
         return None
 
-# ============ 通知系统 ============
+# ============ Notification System ============
 class AlertNotifier:
-    """警报通知"""
+    """Alert notifier"""
 
     def __init__(self, webhook_url: str = None, telegram_config: dict = None,
                  lark_webhook: str = None):
@@ -584,11 +584,11 @@ class AlertNotifier:
         self.lark_webhook = lark_webhook
 
     def send(self, alert: Alert, market_url: str = None):
-        """发送警报"""
-        # 控制台输出
+        """Send alert"""
+        # Console output
         self._print_alert(alert)
 
-        # Webhook (Discord/Slack等)
+        # Webhook (Discord/Slack/etc)
         if self.webhook_url:
             self._send_webhook(alert)
 
@@ -596,31 +596,31 @@ class AlertNotifier:
         if self.telegram_config:
             self._send_telegram(alert)
 
-        # Lark (飞书)
+        # Lark/Feishu
         if self.lark_webhook:
             self._send_lark(alert, market_url)
-    
+
     def _print_alert(self, alert: Alert):
-        """控制台打印"""
+        """Print to console"""
         severity_colors = {
-            "low": "\033[94m",      # 蓝
-            "medium": "\033[93m",   # 黄
-            "high": "\033[91m",     # 红
-            "critical": "\033[95m"  # 紫
+            "low": "\033[94m",      # Blue
+            "medium": "\033[93m",   # Yellow
+            "high": "\033[91m",     # Red
+            "critical": "\033[95m"  # Purple
         }
         reset = "\033[0m"
         color = severity_colors.get(alert.severity, "")
         
         print(f"\n{'='*60}")
         print(f"{color}[{alert.severity.upper()}] {alert.type}{reset}")
-        print(f"时间: {alert.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"市场: {alert.market_slug}")
-        print(f"钱包: {alert.wallet[:10]}...{alert.wallet[-6:]}")
-        print(f"详情: {alert.details.get('message', json.dumps(alert.details))}")
+        print(f"Time: {alert.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"Market: {alert.market_slug}")
+        print(f"Wallet: {alert.wallet[:10]}...{alert.wallet[-6:]}")
+        print(f"Details: {alert.details.get('message', json.dumps(alert.details))}")
         print(f"{'='*60}\n")
-    
+
     def _send_webhook(self, alert: Alert):
-        """发送到Webhook"""
+        """Send to Webhook"""
         try:
             payload = {
                 "content": None,
@@ -629,29 +629,29 @@ class AlertNotifier:
                     "description": alert.details.get("message", ""),
                     "color": {"low": 3447003, "medium": 16776960, "high": 15158332, "critical": 10038562}.get(alert.severity),
                     "fields": [
-                        {"name": "市场", "value": alert.market_slug, "inline": True},
-                        {"name": "钱包", "value": f"`{alert.wallet[:10]}...`", "inline": True},
-                        {"name": "金额", "value": f"${alert.details.get('amount_usd', 'N/A'):,.0f}", "inline": True}
+                        {"name": "Market", "value": alert.market_slug, "inline": True},
+                        {"name": "Wallet", "value": f"`{alert.wallet[:10]}...`", "inline": True},
+                        {"name": "Amount", "value": f"${alert.details.get('amount_usd', 'N/A'):,.0f}", "inline": True}
                     ],
                     "timestamp": alert.timestamp.isoformat()
                 }]
             }
             requests.post(self.webhook_url, json=payload, timeout=10)
         except Exception as e:
-            print(f"[ERROR] Webhook发送失败: {e}")
-    
+            print(f"[ERROR] Failed to send webhook: {e}")
+
     def _send_telegram(self, alert: Alert):
-        """发送到Telegram"""
+        """Send to Telegram"""
         try:
             bot_token = self.telegram_config.get("bot_token")
             chat_id = self.telegram_config.get("chat_id")
-            
+
             text = f"""
 🚨 *{alert.type.upper()}* [{alert.severity.upper()}]
 
-📊 市场: `{alert.market_slug}`
-👛 钱包: `{alert.wallet[:10]}...`
-💵 金额: ${alert.details.get('amount_usd', 'N/A'):,.0f}
+📊 Market: `{alert.market_slug}`
+👛 Wallet: `{alert.wallet[:10]}...`
+💵 Amount: ${alert.details.get('amount_usd', 'N/A'):,.0f}
 
 {alert.details.get('message', '')}
             """
@@ -663,10 +663,10 @@ class AlertNotifier:
                 "parse_mode": "Markdown"
             }, timeout=10)
         except Exception as e:
-            print(f"[ERROR] Telegram发送失败: {e}")
+            print(f"[ERROR] Failed to send Telegram: {e}")
 
     def _send_lark(self, alert: Alert, market_url: str = None):
-        """发送到Lark/飞书"""
+        """Send to Lark/Feishu"""
         try:
             # Color based on severity
             color = {
@@ -745,14 +745,14 @@ class AlertNotifier:
 
             resp = requests.post(self.lark_webhook, json=card, timeout=10)
             if resp.status_code != 200:
-                print(f"[ERROR] Lark发送失败: {resp.text}")
+                print(f"[ERROR] Failed to send Lark: {resp.text}")
         except Exception as e:
-            print(f"[ERROR] Lark发送失败: {e}")
+            print(f"[ERROR] Failed to send Lark: {e}")
 
 
-# ============ 主监控器 ============
+# ============ Main Monitor ============
 class PolymarketMonitor:
-    """主监控器"""
+    """Main monitor orchestrator"""
 
     def __init__(self, webhook_url: str = None, telegram_config: dict = None,
                  lark_webhook: str = None):
@@ -767,7 +767,7 @@ class PolymarketMonitor:
         self._poll_count = 0
 
     def run(self, market_ids: list = None, num_markets: int = 50, max_end_days: int = None):
-        """启动监控"""
+        """Start monitoring"""
         self.running = True
         self._num_markets = num_markets
         self._max_end_days = max_end_days or CONFIG["MAX_END_DAYS"]
@@ -829,16 +829,16 @@ class PolymarketMonitor:
 
                 time.sleep(CONFIG["POLL_INTERVAL_SECONDS"])
             except KeyboardInterrupt:
-                print("\n[INFO] 监控已停止")
+                print("\n[INFO] Monitoring stopped")
                 self.seen_trades_store.save()
                 break
             except Exception as e:
-                print(f"[ERROR] 监控循环错误: {e}")
+                print(f"[ERROR] Monitor loop error: {e}")
                 time.sleep(60)
-    
+
     def _poll_markets(self, market_ids: list = None, num_markets: int = 50,
                       max_end_days: int = None):
-        """轮询市场 - 批量获取交易并匹配到市场"""
+        """Poll markets - batch fetch trades and match to markets"""
         # Use cached markets (fetched at startup), refresh every 100 polls
         if hasattr(self, '_cached_markets') and self._cached_markets and self._poll_count % 100 != 0:
             markets = self._cached_markets
@@ -927,7 +927,7 @@ class PolymarketMonitor:
             trade_logger.debug(f"--- Poll complete: {trades_logged} trades logged ---")
     
     def _parse_trade(self, raw: dict, market: dict) -> Optional[Trade]:
-        """解析原始交易数据 (Data API format)"""
+        """Parse raw trade data (Data API format)"""
         try:
             # Generate unique ID from transaction hash or hash of raw data
             trade_id = raw.get("transactionHash") or raw.get("id") or str(hash(str(raw)))
@@ -965,40 +965,40 @@ class PolymarketMonitor:
 
 # ============ CLI ============
 def main():
-    parser = argparse.ArgumentParser(description="Polymarket 异常交易监控")
-    parser.add_argument("--min-amount", type=float, default=5000, help="新钱包警报阈值 (USD)")
-    parser.add_argument("--large-bet", type=float, default=10000, help="大额交易阈值 (USD)")
-    parser.add_argument("--interval", type=int, default=30, help="监控间隔 (秒)")
-    parser.add_argument("--num-markets", type=int, default=50, help="监控市场数量 (按交易量排序, 默认50)")
-    parser.add_argument("--max-days", type=int, default=30, help="只监控N天内结束的市场 (默认30)")
-    parser.add_argument("--log-file", type=str, default="trades.log", help="交易日志文件路径 (默认: trades.log)")
+    parser = argparse.ArgumentParser(description="Polymarket Abnormal Trade Monitor")
+    parser.add_argument("--min-amount", type=float, default=5000, help="New wallet alert threshold (USD)")
+    parser.add_argument("--large-bet", type=float, default=10000, help="Large trade threshold (USD)")
+    parser.add_argument("--interval", type=int, default=30, help="Polling interval (seconds)")
+    parser.add_argument("--num-markets", type=int, default=50, help="Number of markets to monitor (by volume, default 50)")
+    parser.add_argument("--max-days", type=int, default=30, help="Only monitor markets ending within N days (default 30)")
+    parser.add_argument("--log-file", type=str, default="trades.log", help="Trade log file path (default: trades.log)")
     parser.add_argument("--webhook", type=str, help="Discord/Slack Webhook URL")
     parser.add_argument("--telegram-token", type=str, help="Telegram Bot Token")
     parser.add_argument("--telegram-chat", type=str, help="Telegram Chat ID")
     parser.add_argument("--lark-webhook", type=str, help="Lark/Feishu Bot Webhook URL")
-    parser.add_argument("--markets", type=str, nargs="+", help="指定监控的市场ID (覆盖 --num-markets)")
+    parser.add_argument("--markets", type=str, nargs="+", help="Specific market IDs to monitor (overrides --num-markets)")
     
     args = parser.parse_args()
 
     # Setup logging with custom file
     global trade_logger
     trade_logger = setup_logging(args.log_file)
-    print(f"[INFO] 交易日志: {args.log_file}")
+    print(f"[INFO] Trade log: {args.log_file}")
 
-    # 更新配置
+    # Update config
     CONFIG["NEW_WALLET_THRESHOLD_USD"] = args.min_amount
     CONFIG["LARGE_BET_THRESHOLD_USD"] = args.large_bet
     CONFIG["POLL_INTERVAL_SECONDS"] = args.interval
-    
-    # Telegram配置
+
+    # Telegram config
     telegram_config = None
     if args.telegram_token and args.telegram_chat:
         telegram_config = {
             "bot_token": args.telegram_token,
             "chat_id": args.telegram_chat
         }
-    
-    # 启动监控
+
+    # Start monitor
     monitor = PolymarketMonitor(
         webhook_url=args.webhook,
         telegram_config=telegram_config,

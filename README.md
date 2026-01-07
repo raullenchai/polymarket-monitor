@@ -1,32 +1,30 @@
-# Polymarket 老鼠仓监控脚本
+# Polymarket Abnormal Trade Monitor
 
-## 🎯 功能说明
+A Python script that monitors Polymarket for suspicious trading activity and potential insider trading signals.
 
-这个脚本通过 API 监控 Polymarket 上的异常交易活动，检测潜在的内幕交易（"老鼠仓"）信号。
+## Features
 
-### 检测指标
+| Detection Type | Description | Default Threshold |
+|----------------|-------------|-------------------|
+| New Wallet Large Bets | Wallets with no history suddenly placing large bets | $5,000 |
+| Abnormally Large Trades | Single trades far exceeding market average | $10,000 or 5x average |
+| Repeat Entries | Same wallet repeatedly entering the same market | 3 times within 24 hours |
 
-| 指标 | 说明 | 默认阈值 |
-|------|------|----------|
-| 🆕 新钱包大额下注 | 无历史记录的钱包突然大额进场 | $5,000 |
-| 💰 异常大额交易 | 单笔金额远超市场平均 | $10,000 或 5x 平均 |
-| 🔄 重复进场 | 同一钱包在短时间内反复加仓 | 24小时内3次 |
+## Quick Start
 
-## 🚀 快速开始
-
-### 安装依赖
+### Install Dependencies
 
 ```bash
 pip install requests
 ```
 
-### 基础运行
+### Basic Usage
 
 ```bash
 python polymarket_monitor.py
 ```
 
-### 带通知运行
+### With Notifications
 
 ```bash
 # Discord/Slack Webhook
@@ -36,9 +34,12 @@ python polymarket_monitor.py --webhook "https://discord.com/api/webhooks/xxx"
 python polymarket_monitor.py \
     --telegram-token "123456:ABC-DEF" \
     --telegram-chat "-1001234567890"
+
+# Lark/Feishu
+python polymarket_monitor.py --lark-webhook "https://open.larksuite.com/open-apis/bot/v2/hook/xxx"
 ```
 
-### 自定义阈值
+### Custom Thresholds
 
 ```bash
 python polymarket_monitor.py \
@@ -47,62 +48,79 @@ python polymarket_monitor.py \
     --interval 15
 ```
 
-### 监控特定市场
+### Monitor Specific Markets
 
 ```bash
 python polymarket_monitor.py --markets "0x123..." "0x456..."
 ```
 
-## 📊 参数说明
+## CLI Arguments
 
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `--min-amount` | 新钱包警报阈值 (USD) | 5000 |
-| `--large-bet` | 大额交易阈值 (USD) | 10000 |
-| `--interval` | 监控间隔 (秒) | 30 |
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--min-amount` | New wallet alert threshold (USD) | 5000 |
+| `--large-bet` | Large trade threshold (USD) | 10000 |
+| `--interval` | Polling interval (seconds) | 30 |
+| `--num-markets` | Number of markets to monitor (by volume) | 50 |
+| `--max-days` | Only monitor markets ending within N days | 30 |
+| `--log-file` | Trade log file path | trades.log |
 | `--webhook` | Discord/Slack Webhook URL | - |
 | `--telegram-token` | Telegram Bot Token | - |
 | `--telegram-chat` | Telegram Chat ID | - |
-| `--markets` | 指定监控的市场ID | 全部 |
+| `--lark-webhook` | Lark/Feishu Webhook URL | - |
+| `--markets` | Specific market IDs to monitor | All |
 
-## ⚠️ 重要提示
+## Important Notes
 
-1. **API 限制**: Polymarket 可能有请求频率限制，建议 interval 不低于 15 秒
-2. **仅供参考**: 警报仅作为信号参考，不构成投资建议
-3. **人工复核**: 脚本只负责报警，需要人工判断是否跟单
-4. **风险自担**: 预测市场波动大，投资需谨慎
+1. **API Rate Limits**: Polymarket may have rate limits; recommended interval is at least 15 seconds
+2. **Not Financial Advice**: Alerts are signals only, not investment recommendations
+3. **Manual Review Required**: The script only alerts; humans must decide whether to act
+4. **Risk Warning**: Prediction markets are volatile; invest cautiously
 
-## 🔧 进阶配置
+## Advanced Configuration
 
-修改脚本顶部的 `CONFIG` 字典可以调整更多参数：
+Modify the `CONFIG` dict at the top of the script for more options:
 
 ```python
 CONFIG = {
-    "NEW_WALLET_THRESHOLD_USD": 5000,      # 新钱包阈值
-    "LARGE_BET_THRESHOLD_USD": 10000,      # 大额交易阈值
-    "LARGE_BET_MULTIPLIER": 5,             # 超过平均X倍视为异常
-    "REPEAT_ENTRY_COUNT": 3,               # 重复进场次数
-    "REPEAT_ENTRY_WINDOW_HOURS": 24,       # 时间窗口
-    "WALLET_AGE_THRESHOLD_DAYS": 7,        # 新钱包定义
-    "POLL_INTERVAL_SECONDS": 30,           # 轮询间隔
+    "NEW_WALLET_THRESHOLD_USD": 5000,      # New wallet threshold
+    "LARGE_BET_THRESHOLD_USD": 10000,      # Large trade threshold
+    "LARGE_BET_MULTIPLIER": 5,             # Multiplier above average = anomaly
+    "REPEAT_ENTRY_COUNT": 3,               # Repeat entry count threshold
+    "REPEAT_ENTRY_WINDOW_HOURS": 24,       # Time window for repeat detection
+    "WALLET_AGE_THRESHOLD_DAYS": 7,        # Days to consider wallet "new"
+    "POLL_INTERVAL_SECONDS": 30,           # Polling interval
 }
 ```
 
-## 📝 输出示例
+## Output Example
 
 ```
 ============================================================
 [CRITICAL] new_wallet
-时间: 2025-01-06 15:30:45
-市场: will-trump-win-2024
-钱包: 0x1234...abcd
-详情: 🚨 新钱包大额下注! $15,000 on Yes @ 0.65
+Time: 2025-01-06 15:30:45
+Market: will-trump-win-2024
+Wallet: 0x1234...abcd
+Details: New wallet large bet! $15,000 on Yes @ 0.65
 ============================================================
 ```
 
-## 🤝 扩展建议
+## Future Improvements
 
-1. **添加更多数据源**: 结合链上数据分析钱包关联
-2. **机器学习**: 训练模型识别更复杂的异常模式
-3. **自动交易**: 可以对接交易 API 实现自动跟单（风险自担）
-4. **数据库存储**: 保存历史数据用于回测分析
+1. **On-chain Analysis**: Combine with blockchain data to analyze wallet relationships
+2. **Machine Learning**: Train models to identify more complex anomaly patterns
+3. **Auto-trading**: Connect to trading API for automated copy-trading (at your own risk)
+4. **Database Storage**: Save historical data for backtesting analysis
+
+## Testing
+
+```bash
+# Run tests with coverage
+pytest tests/ -v --cov=polymarket_monitor --cov-report=term-missing
+```
+
+Current coverage: 81%
+
+## License
+
+MIT

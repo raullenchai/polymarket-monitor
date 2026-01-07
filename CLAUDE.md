@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This is a **Polymarket abnormal trading monitor** (老鼠仓检测) that detects potential insider trading signals on the Polymarket prediction market platform.
+This is a **Polymarket Abnormal Trade Monitor** that detects potential insider trading signals on the Polymarket prediction market platform.
 
 The script monitors for:
 1. **New wallet large bets** - Wallets with no history suddenly placing large bets
@@ -16,23 +16,29 @@ The script monitors for:
 - **APIs Used**:
   - Polymarket CLOB API: `https://clob.polymarket.com`
   - Polymarket Gamma API: `https://gamma-api.polymarket.com`
+  - Polymarket Data API: `https://data-api.polymarket.com`
 
 ## Project Structure
 
 ```
 .
 ├── polymarket_monitor.py   # Main script (single file)
+├── tests/                  # Test suite (81% coverage)
 ├── README.md               # User documentation
-└── CLAUDE.md               # This file
+├── CLAUDE.md               # This file
+├── requirements.txt        # Dependencies
+└── .gitignore              # Git ignore rules
 ```
 
 ## Key Classes
 
 | Class | Purpose |
 |-------|---------|
+| `RateLimiter` | Token bucket rate limiter for API requests |
+| `SeenTradesStore` | Persistent storage for processed trade IDs |
 | `PolymarketClient` | API client for fetching markets, trades, wallet history |
 | `AnomalyDetector` | Core detection engine with 3 detection methods |
-| `AlertNotifier` | Sends alerts to console, Discord/Slack webhook, Telegram |
+| `AlertNotifier` | Sends alerts to console, Discord/Slack, Telegram, Lark |
 | `PolymarketMonitor` | Main orchestrator that polls markets and processes trades |
 
 ## Data Structures
@@ -42,7 +48,7 @@ The script monitors for:
 class Trade:
     id, market_id, market_slug, wallet, side, outcome, amount_usd, price, timestamp
 
-@dataclass  
+@dataclass
 class Alert:
     type, severity, wallet, market_id, market_slug, details, timestamp
 ```
@@ -60,6 +66,8 @@ CONFIG = {
     "REPEAT_ENTRY_WINDOW_HOURS": 24,
     "WALLET_AGE_THRESHOLD_DAYS": 7,
     "POLL_INTERVAL_SECONDS": 30,
+    "RATE_LIMIT_RPS": 2,
+    "RATE_LIMIT_BURST": 5,
 }
 ```
 
@@ -80,8 +88,8 @@ CONFIG = {
 ### Modifying API endpoints
 
 The Polymarket API may change. Key endpoints are in `PolymarketClient`:
-- `get_markets()` - List active markets
-- `get_market_trades()` - Get trades for a token
+- `get_markets()` - List active markets (from Events and Markets APIs)
+- `get_recent_trades()` - Get recent trades across all markets
 - `get_wallet_history()` - Check if wallet is new
 
 ## Code Style
@@ -89,31 +97,34 @@ The Polymarket API may change. Key endpoints are in `PolymarketClient`:
 - Use type hints for function signatures
 - Dataclasses for structured data
 - f-strings for formatting
-- Chinese comments are acceptable (this is for a Chinese-speaking user)
+- English comments and messages
 - Keep it single-file for simplicity unless it grows significantly
+
+## Completed Features
+
+- [x] Rate limiting to avoid API throttling
+- [x] Persistent storage for trade deduplication
+- [x] Lark/Feishu notification support
+- [x] Colored console output for alerts
+- [x] Full wallet address and market name in logs
+- [x] Clickable Polymarket URLs
+- [x] Market list display at startup
+- [x] Test coverage above 75%
 
 ## Known Issues / TODOs
 
-- [ ] Polymarket API endpoints may need updating based on their latest docs
-- [ ] `get_wallet_history()` endpoint is a guess - needs verification
-- [ ] Add rate limiting to avoid API throttling
-- [ ] Add persistent storage for trade history (currently in-memory only)
 - [ ] Add backtesting capability with historical data
 - [ ] Consider adding whale wallet tracking (known big players)
+- [ ] Add more sophisticated wallet age detection via on-chain data
 
 ## Testing
 
-Currently no tests. To add tests:
 ```bash
-# Suggested structure
-tests/
-├── test_detector.py
-├── test_client.py
-└── fixtures/
-    └── sample_trades.json
+# Run tests with coverage
+pytest tests/ -v --cov=polymarket_monitor --cov-report=term-missing
 ```
 
-Mock the API responses for unit testing the detection logic.
+Current coverage: 81%
 
 ## Running the Script
 
@@ -121,8 +132,8 @@ Mock the API responses for unit testing the detection logic.
 # Basic
 python polymarket_monitor.py
 
-# With notifications
-python polymarket_monitor.py --webhook "https://discord.com/api/webhooks/..."
+# With Lark notifications
+python polymarket_monitor.py --lark-webhook "https://open.larksuite.com/..."
 
 # Custom thresholds
 python polymarket_monitor.py --min-amount 3000 --large-bet 8000 --interval 15
@@ -131,12 +142,12 @@ python polymarket_monitor.py --min-amount 3000 --large-bet 8000 --interval 15
 ## API Documentation References
 
 - Polymarket CLOB API: https://docs.polymarket.com/
-- Polymarket Gamma API: https://gamma-api.polymarket.com/docs (if available)
+- Polymarket Gamma API: https://gamma-api.polymarket.com
 
 ## Important Notes for Claude Code
 
 1. **Single file architecture** - Keep everything in `polymarket_monitor.py` unless there's a strong reason to split
 2. **Minimal dependencies** - Only `requests` is required, avoid adding unnecessary deps
-3. **User is Chinese-speaking** - Chinese comments and output messages are fine
+3. **English only** - All comments and output messages should be in English
 4. **This is a monitoring tool, not auto-trading** - It alerts only, human makes the decision
-5. **API may be outdated** - Polymarket APIs change; if something doesn't work, check their latest docs first
+5. **API may change** - Polymarket APIs change; if something doesn't work, check their latest docs first
