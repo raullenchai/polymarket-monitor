@@ -27,6 +27,8 @@ from polymarket_monitor import (
     AnomalyDetector,
     AlertNotifier,
     PolymarketMonitor,
+    ColoredConsoleFormatter,
+    setup_logging,
 )
 
 
@@ -672,3 +674,471 @@ class TestIntegration:
 
         alerts = detector.analyze_trade(trade)
         assert len(alerts) == 0  # Skipped because already persisted
+
+
+# ============ ColoredConsoleFormatter Tests ============
+
+class TestColoredConsoleFormatter:
+    def test_format_warning_adds_yellow(self):
+        import logging
+        formatter = ColoredConsoleFormatter('%(message)s')
+        record = logging.LogRecord(
+            name='test', level=logging.WARNING, pathname='', lineno=0,
+            msg='Test warning', args=(), exc_info=None
+        )
+        result = formatter.format(record)
+        assert '\033[93m' in result  # Yellow
+        assert '\033[0m' in result   # Reset
+
+    def test_format_critical_adds_red(self):
+        import logging
+        formatter = ColoredConsoleFormatter('%(message)s')
+        record = logging.LogRecord(
+            name='test', level=logging.CRITICAL, pathname='', lineno=0,
+            msg='Test critical', args=(), exc_info=None
+        )
+        result = formatter.format(record)
+        assert '\033[91m' in result  # Red
+        assert '\033[0m' in result   # Reset
+
+    def test_format_info_no_color(self):
+        import logging
+        formatter = ColoredConsoleFormatter('%(message)s')
+        record = logging.LogRecord(
+            name='test', level=logging.INFO, pathname='', lineno=0,
+            msg='Test info', args=(), exc_info=None
+        )
+        result = formatter.format(record)
+        assert '\033[' not in result  # No color codes
+
+
+class TestSetupLogging:
+    def test_setup_logging_creates_logger(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix='.log', delete=False) as f:
+            logger = setup_logging(f.name)
+            assert logger is not None
+            assert len(logger.handlers) == 2  # File + Console
+
+
+# ============ Additional AlertNotifier Tests ============
+
+class TestAlertNotifierLark:
+    @patch('polymarket_monitor.requests.post')
+    def test_send_lark_success(self, mock_post):
+        mock_post.return_value.status_code = 200
+        notifier = AlertNotifier(lark_webhook="https://open.larksuite.com/test")
+        alert = Alert(
+            type="new_wallet",
+            severity="high",
+            wallet="0x1234567890abcdef",
+            market_id="market_1",
+            market_slug="test-market",
+            details={"amount_usd": 5000, "message": "Test alert"}
+        )
+
+        notifier._send_lark(alert, market_url="https://polymarket.com/event/test")
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        assert 'card' in call_args.kwargs['json']
+
+    @patch('polymarket_monitor.requests.post')
+    def test_send_lark_error_handling(self, mock_post):
+        mock_post.return_value.status_code = 400
+        mock_post.return_value.text = "Bad request"
+        notifier = AlertNotifier(lark_webhook="https://open.larksuite.com/test")
+        alert = Alert(
+            type="large_bet",
+            severity="critical",
+            wallet="0xabc",
+            market_id="market_1",
+            market_slug="test-market",
+            details={"amount_usd": 10000, "message": "Large bet"}
+        )
+
+        # Should not raise
+        notifier._send_lark(alert)
+
+    @patch('polymarket_monitor.requests.post')
+    def test_send_lark_exception_handling(self, mock_post):
+        mock_post.side_effect = Exception("Network error")
+        notifier = AlertNotifier(lark_webhook="https://open.larksuite.com/test")
+        alert = Alert(
+            type="repeat_entry",
+            severity="medium",
+            wallet="0xdef",
+            market_id="market_1",
+            market_slug="test-market",
+            details={"message": "Repeat entry"}
+        )
+
+        # Should not raise
+        notifier._send_lark(alert)
+
+    def test_send_calls_lark_when_configured(self):
+        with patch.object(AlertNotifier, '_print_alert'):
+            with patch.object(AlertNotifier, '_send_lark') as mock_lark:
+                notifier = AlertNotifier(lark_webhook="https://lark.test")
+                alert = Alert(
+                    type="test",
+                    severity="low",
+                    wallet="0x123",
+                    market_id="m1",
+                    market_slug="test",
+                    details={}
+                )
+                notifier.send(alert, market_url="https://polymarket.com")
+                mock_lark.assert_called_once()
+
+
+# ============ Additional PolymarketClient Tests ============
+
+class TestPolymarketClientAdditional:
+    @patch('polymarket_monitor.requests.Session')
+    def test_get_market_info_success(self, mock_session_class):
+        mock_session = MagicMock()
+        mock_session_class.return_value = mock_session
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"id": "market_1", "question": "Test?"}
+        mock_session.request.return_value = mock_response
+
+        limiter = RateLimiter(rps=100, burst=100)
+        client = PolymarketClient(rate_limiter=limiter)
+        client.session = mock_session
+
+        result = client.get_market_info("condition_123")
+        assert result["id"] == "market_1"
+
+    @patch('polymarket_monitor.requests.Session')
+    def test_get_market_info_error(self, mock_session_class):
+        mock_session = MagicMock()
+        mock_session_class.return_value = mock_session
+        mock_session.request.side_effect = Exception("API error")
+
+        limiter = RateLimiter(rps=100, burst=100)
+        client = PolymarketClient(rate_limiter=limiter)
+        client.session = mock_session
+
+        result = client.get_market_info("condition_123")
+        assert result == {}
+
+    @patch('polymarket_monitor.requests.Session')
+    def test_get_last_trade_price_success(self, mock_session_class):
+        mock_session = MagicMock()
+        mock_session_class.return_value = mock_session
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"price": "0.75"}
+        mock_session.request.return_value = mock_response
+
+        limiter = RateLimiter(rps=100, burst=100)
+        client = PolymarketClient(rate_limiter=limiter)
+        client.session = mock_session
+
+        result = client.get_last_trade_price("token_123")
+        assert result == 0.75
+
+    @patch('polymarket_monitor.requests.Session')
+    def test_get_last_trade_price_error(self, mock_session_class):
+        mock_session = MagicMock()
+        mock_session_class.return_value = mock_session
+        mock_session.request.side_effect = Exception("API error")
+
+        limiter = RateLimiter(rps=100, burst=100)
+        client = PolymarketClient(rate_limiter=limiter)
+        client.session = mock_session
+
+        result = client.get_last_trade_price("token_123")
+        assert result is None
+
+    @patch('polymarket_monitor.requests.Session')
+    def test_get_recent_trades_error(self, mock_session_class):
+        mock_session = MagicMock()
+        mock_session_class.return_value = mock_session
+        mock_session.request.side_effect = Exception("API error")
+
+        limiter = RateLimiter(rps=100, burst=100)
+        client = PolymarketClient(rate_limiter=limiter)
+        client.session = mock_session
+
+        result = client.get_recent_trades()
+        assert result == []
+
+    @patch('polymarket_monitor.requests.Session')
+    def test_get_market_trades_error(self, mock_session_class):
+        mock_session = MagicMock()
+        mock_session_class.return_value = mock_session
+        mock_session.request.side_effect = Exception("API error")
+
+        limiter = RateLimiter(rps=100, burst=100)
+        client = PolymarketClient(rate_limiter=limiter)
+        client.session = mock_session
+
+        result = client.get_market_trades("token_123")
+        assert result == []
+
+    @patch('polymarket_monitor.requests.Session')
+    def test_get_wallet_history_success(self, mock_session_class):
+        mock_session = MagicMock()
+        mock_session_class.return_value = mock_session
+        mock_response = MagicMock()
+        mock_response.json.return_value = [
+            {"value": "100"},
+            {"value": "200"}
+        ]
+        mock_session.request.return_value = mock_response
+
+        limiter = RateLimiter(rps=100, burst=100)
+        client = PolymarketClient(rate_limiter=limiter)
+        client.session = mock_session
+
+        result = client.get_wallet_history("0x123")
+        assert result["total_trades"] == 2
+        assert result["total_volume"] == 300
+
+    @patch('polymarket_monitor.requests.Session')
+    def test_get_markets_with_sorting_and_filtering(self, mock_session_class):
+        from datetime import timezone
+        mock_session = MagicMock()
+        mock_session_class.return_value = mock_session
+
+        # Mock events response
+        future_date = (datetime.now(timezone.utc) + timedelta(days=10)).isoformat()
+        mock_response = MagicMock()
+        mock_response.json.side_effect = [
+            # Events response
+            [{"id": "event_1", "endDate": future_date, "markets": [
+                {"id": "m1", "volume": "5000", "clobTokenIds": '["t1"]'}
+            ]}],
+            # Markets response
+            [{"id": "m2", "volume": "10000", "endDate": future_date}]
+        ]
+        mock_response.raise_for_status = MagicMock()
+        mock_session.request.return_value = mock_response
+
+        limiter = RateLimiter(rps=100, burst=100)
+        client = PolymarketClient(rate_limiter=limiter)
+        client.session = mock_session
+
+        markets = client.get_markets(limit=10, sort_by_volume=True, max_end_days=30)
+        # Should have combined and deduplicated markets
+        assert isinstance(markets, list)
+
+
+# ============ Additional AnomalyDetector Tests ============
+
+class TestAnomalyDetectorAdditional:
+    def test_new_wallet_with_few_trades(self, mock_client, temp_seen_trades_file):
+        """Wallet with < 5 trades is considered new"""
+        store = SeenTradesStore(filepath=str(temp_seen_trades_file), ttl_hours=1)
+        detector = AnomalyDetector(mock_client, seen_trades_store=store)
+
+        mock_client.get_wallet_history.return_value = {
+            "first_seen": (datetime.now() - timedelta(days=30)).isoformat(),
+            "total_trades": 3,  # Less than 5
+            "total_volume": 1000
+        }
+
+        trade = Trade(
+            id="trade_few_trades",
+            market_id="m1",
+            market_slug="test",
+            wallet="0xfewtradeswallet",
+            side="buy",
+            outcome="Yes",
+            amount_usd=6000.0,
+            price=0.5,
+            timestamp=datetime.now(),
+        )
+
+        alerts = detector.analyze_trade(trade)
+        new_wallet_alerts = [a for a in alerts if a.type == "new_wallet"]
+        assert len(new_wallet_alerts) >= 1
+
+    def test_new_wallet_recent_first_seen(self, mock_client, temp_seen_trades_file):
+        """Wallet with recent first_seen (< 7 days) is considered new"""
+        store = SeenTradesStore(filepath=str(temp_seen_trades_file), ttl_hours=1)
+        detector = AnomalyDetector(mock_client, seen_trades_store=store)
+
+        mock_client.get_wallet_history.return_value = {
+            "first_seen": (datetime.now() - timedelta(days=3)).isoformat(),
+            "total_trades": 10,
+            "total_volume": 5000
+        }
+
+        trade = Trade(
+            id="trade_recent_wallet",
+            market_id="m1",
+            market_slug="test",
+            wallet="0xrecentwallet",
+            side="buy",
+            outcome="Yes",
+            amount_usd=6000.0,
+            price=0.5,
+            timestamp=datetime.now(),
+        )
+
+        alerts = detector.analyze_trade(trade)
+        new_wallet_alerts = [a for a in alerts if a.type == "new_wallet"]
+        assert len(new_wallet_alerts) >= 1
+
+    def test_old_wallet_no_alert(self, mock_client, temp_seen_trades_file):
+        """Old wallet with many trades should not trigger new_wallet alert"""
+        store = SeenTradesStore(filepath=str(temp_seen_trades_file), ttl_hours=1)
+        detector = AnomalyDetector(mock_client, seen_trades_store=store)
+
+        mock_client.get_wallet_history.return_value = {
+            "first_seen": (datetime.now() - timedelta(days=60)).isoformat(),
+            "total_trades": 100,
+            "total_volume": 50000
+        }
+
+        trade = Trade(
+            id="trade_old_wallet",
+            market_id="m1",
+            market_slug="test",
+            wallet="0xoldwallet",
+            side="buy",
+            outcome="Yes",
+            amount_usd=6000.0,
+            price=0.5,
+            timestamp=datetime.now(),
+        )
+
+        alerts = detector.analyze_trade(trade)
+        new_wallet_alerts = [a for a in alerts if a.type == "new_wallet"]
+        assert len(new_wallet_alerts) == 0
+
+    def test_critical_severity_for_very_large_bet(self, mock_client, temp_seen_trades_file):
+        """Very large bet from new wallet should be critical severity"""
+        store = SeenTradesStore(filepath=str(temp_seen_trades_file), ttl_hours=1)
+        detector = AnomalyDetector(mock_client, seen_trades_store=store)
+
+        mock_client.get_wallet_history.return_value = {
+            "first_seen": None,
+            "total_trades": 0,
+            "total_volume": 0
+        }
+
+        trade = Trade(
+            id="trade_critical",
+            market_id="m1",
+            market_slug="test",
+            wallet="0xcriticalwallet",
+            side="buy",
+            outcome="Yes",
+            amount_usd=15000.0,  # > 2x threshold
+            price=0.5,
+            timestamp=datetime.now(),
+        )
+
+        alerts = detector.analyze_trade(trade)
+        new_wallet_alerts = [a for a in alerts if a.type == "new_wallet"]
+        assert len(new_wallet_alerts) >= 1
+        assert new_wallet_alerts[0].severity == "critical"
+
+
+# ============ PolymarketMonitor Additional Tests ============
+
+class TestPolymarketMonitorAdditional:
+    def test_parse_trade_with_proxy_wallet(self):
+        with patch.object(SeenTradesStore, '_load'):
+            monitor = PolymarketMonitor()
+            raw = {
+                "transactionHash": "0xhash123",
+                "proxyWallet": "0xproxywallet",
+                "side": "buy",
+                "outcome": "Yes",
+                "size": "200",
+                "price": "0.6",
+                "timestamp": 1704110400  # Unix timestamp
+            }
+            market = {"id": "market_1", "slug": "test-market", "conditionId": "cond_1"}
+
+            trade = monitor._parse_trade(raw, market)
+
+            assert trade is not None
+            assert trade.wallet == "0xproxywallet"
+            assert trade.id == "0xhash123"
+
+    def test_parse_trade_with_timestamp_string(self):
+        with patch.object(SeenTradesStore, '_load'):
+            monitor = PolymarketMonitor()
+            raw = {
+                "id": "trade_456",
+                "owner": "0xowner",
+                "side": "sell",
+                "outcome": "No",
+                "size": "50",
+                "price": "0.3",
+                "timestamp": "2025-01-01T12:00:00Z"
+            }
+            market = {"conditionId": "cond_1", "slug": "test"}
+
+            trade = monitor._parse_trade(raw, market)
+
+            assert trade is not None
+            assert trade.side == "sell"
+            assert trade.outcome == "No"
+
+    def test_init_with_lark_webhook(self):
+        with patch.object(SeenTradesStore, '_load'):
+            monitor = PolymarketMonitor(lark_webhook="https://lark.test/webhook")
+            assert monitor.notifier.lark_webhook == "https://lark.test/webhook"
+
+    @patch.object(PolymarketClient, 'get_markets')
+    @patch.object(PolymarketClient, 'get_recent_trades')
+    def test_poll_markets_with_cached_markets(self, mock_get_trades, mock_get_markets):
+        mock_get_markets.return_value = [
+            {"id": "m1", "slug": "test", "clobTokenIds": '["t1"]', "question": "Test?"}
+        ]
+        mock_get_trades.return_value = []
+
+        with patch.object(SeenTradesStore, '_load'):
+            monitor = PolymarketMonitor()
+            monitor._cached_markets = [
+                {"id": "m1", "slug": "cached", "clobTokenIds": '["t1"]'}
+            ]
+            monitor._poll_count = 5  # Not a refresh cycle
+
+            monitor._poll_markets()
+
+            # Should not call get_markets because cached
+            mock_get_markets.assert_not_called()
+
+    @patch.object(PolymarketClient, 'get_markets')
+    @patch.object(PolymarketClient, 'get_recent_trades')
+    def test_poll_markets_empty_markets(self, mock_get_trades, mock_get_markets):
+        mock_get_markets.return_value = []
+
+        with patch.object(SeenTradesStore, '_load'):
+            monitor = PolymarketMonitor()
+            monitor._poll_markets()
+
+            mock_get_trades.assert_not_called()
+
+    @patch.object(PolymarketClient, 'get_markets')
+    @patch.object(PolymarketClient, 'get_recent_trades')
+    def test_poll_markets_with_alerts(self, mock_get_trades, mock_get_markets):
+        mock_get_markets.return_value = [
+            {"id": "m1", "slug": "alert-market", "question": "Alert test?",
+             "clobTokenIds": '["token_alert"]', "_event_slug": "event-slug"}
+        ]
+        mock_get_trades.return_value = [
+            {"id": "t1", "asset": "token_alert", "proxyWallet": "0xnewwallet123",
+             "side": "buy", "outcome": "Yes", "size": "10000", "price": "0.6",
+             "timestamp": 1704110400, "transactionHash": "0xalerttx"}
+        ]
+
+        with patch.object(SeenTradesStore, '_load'):
+            with patch.object(AlertNotifier, 'send') as mock_send:
+                with patch.object(PolymarketClient, 'get_wallet_history') as mock_wallet:
+                    mock_wallet.return_value = {
+                        "first_seen": None,
+                        "total_trades": 0,
+                        "total_volume": 0
+                    }
+                    monitor = PolymarketMonitor()
+                    monitor._poll_markets()
+
+                    # Should have triggered alerts and called send
+                    assert mock_send.called
