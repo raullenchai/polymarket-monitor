@@ -714,7 +714,7 @@ class AlertNotifier:
                                     "is_short": True,
                                     "text": {
                                         "tag": "lark_md",
-                                        "content": f"**Amount**\n${alert.details.get('amount_usd', 0):,.0f}"
+                                        "content": f"**Amount**\n${alert.details.get('amount_usd', alert.details.get('total_amount', 0)):,.0f}"
                                     }
                                 }
                             ]
