@@ -433,6 +433,7 @@ class AnomalyDetector:
         self.market_stats = {}  # Market statistics cache
         self.trade_history = defaultdict(list)  # Wallet trade history
         self.seen_trades = seen_trades_store or SeenTradesStore()  # Persistent processed trade IDs
+        self.alerted_new_wallets = set()  # Wallets already flagged as "new"
         self.alerts = []
 
     def analyze_trade(self, trade: Trade) -> list[Alert]:
@@ -467,7 +468,11 @@ class AnomalyDetector:
         """Detect new wallet large bets"""
         if trade.amount_usd < CONFIG["NEW_WALLET_THRESHOLD_USD"]:
             return None
-        
+
+        # Skip if already flagged as new wallet
+        if trade.wallet in self.alerted_new_wallets:
+            return None
+
         # Get or cache wallet info
         if trade.wallet not in self.wallet_cache:
             self.wallet_cache[trade.wallet] = self.client.get_wallet_history(trade.wallet)
@@ -490,6 +495,8 @@ class AnomalyDetector:
         
         if is_new:
             severity = "critical" if trade.amount_usd > CONFIG["NEW_WALLET_THRESHOLD_USD"] * 2 else "high"
+            # Mark wallet as flagged to avoid duplicate alerts
+            self.alerted_new_wallets.add(trade.wallet)
             return Alert(
                 type="new_wallet",
                 severity=severity,
