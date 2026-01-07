@@ -19,7 +19,8 @@ import argparse
 import threading
 import atexit
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Optional
@@ -749,7 +750,7 @@ class AlertNotifier:
                             "tag": "div",
                             "text": {
                                 "tag": "lark_md",
-                                "content": f"**Time:** {alert.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}"
+                                "content": f"**Time:** {alert.timestamp.astimezone(ZoneInfo('America/Los_Angeles')).strftime('%Y-%m-%d %H:%M:%S PT')}"
                             }
                         },
                         {
