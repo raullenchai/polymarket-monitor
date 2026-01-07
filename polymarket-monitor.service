@@ -1,0 +1,21 @@
+[Unit]
+Description=Polymarket Abnormal Trade Monitor
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/polymarket-monitor
+ExecStart=/home/ubuntu/polymarket-monitor/.venv/bin/python polymarket_monitor.py --lark-webhook "YOUR_LARK_WEBHOOK_URL" --log-file /home/ubuntu/polymarket-monitor/trades.log
+Restart=always
+RestartSec=10
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+
+# Logging
+StandardOutput=append:/var/log/polymarket-monitor.log
+StandardError=append:/var/log/polymarket-monitor.log
+
+[Install]
+WantedBy=multi-user.target

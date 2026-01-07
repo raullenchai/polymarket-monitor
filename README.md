@@ -112,6 +112,55 @@ Details: New wallet large bet! $15,000 on Yes @ 0.65
 3. **Auto-trading**: Connect to trading API for automated copy-trading (at your own risk)
 4. **Database Storage**: Save historical data for backtesting analysis
 
+## Deploy on Ubuntu Server
+
+### Quick Setup
+
+```bash
+# Clone repo
+cd ~
+git clone https://github.com/raullenchai/polymarket-monitor.git
+cd polymarket-monitor
+
+# Setup Python virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Test run
+python polymarket_monitor.py --lark-webhook "YOUR_WEBHOOK_URL"
+```
+
+### Run as Systemd Service (recommended)
+
+```bash
+# Edit service file with your webhook URL
+nano polymarket-monitor.service
+
+# Install service
+sudo cp polymarket-monitor.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable polymarket-monitor
+sudo systemctl start polymarket-monitor
+
+# Check status
+sudo systemctl status polymarket-monitor
+
+# View logs
+sudo journalctl -u polymarket-monitor -f
+# Or: tail -f /var/log/polymarket-monitor.log
+```
+
+### Run with Screen (alternative)
+
+```bash
+screen -S polymarket
+source .venv/bin/activate
+python polymarket_monitor.py --lark-webhook "YOUR_WEBHOOK_URL" --log-file trades.log
+# Ctrl+A, D to detach
+# screen -r polymarket to reattach
+```
+
 ## Testing
 
 ```bash
