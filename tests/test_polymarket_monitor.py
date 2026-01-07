@@ -1142,3 +1142,231 @@ class TestPolymarketMonitorAdditional:
 
                     # Should have triggered alerts and called send
                     assert mock_send.called
+
+
+# ============ Tests for Bug Fixes ============
+
+class TestDuplicateNewWalletAlertPrevention:
+    """Tests for fix: duplicate NEW_WALLET alerts for same wallet"""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock(spec=PolymarketClient)
+        client.get_wallet_history.return_value = {
+            "first_seen": None,
+            "total_trades": 0,
+            "total_volume": 0
+        }
+        return client
+
+    @pytest.fixture
+    def temp_seen_trades_file(self, tmp_path):
+        return tmp_path / "seen_trades_dup.json"
+
+    def test_no_duplicate_new_wallet_alerts(self, mock_client, temp_seen_trades_file):
+        """Same wallet should only trigger NEW_WALLET alert once"""
+        store = SeenTradesStore(filepath=str(temp_seen_trades_file), ttl_hours=1)
+        detector = AnomalyDetector(mock_client, seen_trades_store=store)
+
+        wallet = "0xduplicatewallet"
+
+        # First trade - should trigger new_wallet alert
+        trade1 = Trade(
+            id="trade_dup_1",
+            market_id="m1",
+            market_slug="test",
+            wallet=wallet,
+            side="buy",
+            outcome="Yes",
+            amount_usd=6000.0,
+            price=0.5,
+            timestamp=datetime.now(),
+        )
+        alerts1 = detector.analyze_trade(trade1)
+        new_wallet_alerts1 = [a for a in alerts1 if a.type == "new_wallet"]
+        assert len(new_wallet_alerts1) == 1, "First trade should trigger new_wallet alert"
+
+        # Second trade from same wallet - should NOT trigger new_wallet alert
+        trade2 = Trade(
+            id="trade_dup_2",
+            market_id="m1",
+            market_slug="test",
+            wallet=wallet,
+            side="buy",
+            outcome="Yes",
+            amount_usd=7000.0,
+            price=0.6,
+            timestamp=datetime.now(),
+        )
+        alerts2 = detector.analyze_trade(trade2)
+        new_wallet_alerts2 = [a for a in alerts2 if a.type == "new_wallet"]
+        assert len(new_wallet_alerts2) == 0, "Second trade should NOT trigger new_wallet alert"
+
+    def test_different_wallets_both_get_alerts(self, mock_client, temp_seen_trades_file):
+        """Different wallets should each get their own NEW_WALLET alert"""
+        store = SeenTradesStore(filepath=str(temp_seen_trades_file), ttl_hours=1)
+        detector = AnomalyDetector(mock_client, seen_trades_store=store)
+
+        # First wallet
+        trade1 = Trade(
+            id="trade_w1",
+            market_id="m1",
+            market_slug="test",
+            wallet="0xwallet1",
+            side="buy",
+            outcome="Yes",
+            amount_usd=6000.0,
+            price=0.5,
+            timestamp=datetime.now(),
+        )
+        alerts1 = detector.analyze_trade(trade1)
+        assert len([a for a in alerts1 if a.type == "new_wallet"]) == 1
+
+        # Second wallet - should also trigger alert
+        trade2 = Trade(
+            id="trade_w2",
+            market_id="m1",
+            market_slug="test",
+            wallet="0xwallet2",
+            side="buy",
+            outcome="Yes",
+            amount_usd=6000.0,
+            price=0.5,
+            timestamp=datetime.now(),
+        )
+        alerts2 = detector.analyze_trade(trade2)
+        assert len([a for a in alerts2 if a.type == "new_wallet"]) == 1
+
+    def test_alerted_new_wallets_tracking(self, mock_client, temp_seen_trades_file):
+        """Verify that alerted_new_wallets set is properly maintained"""
+        store = SeenTradesStore(filepath=str(temp_seen_trades_file), ttl_hours=1)
+        detector = AnomalyDetector(mock_client, seen_trades_store=store)
+
+        assert len(detector.alerted_new_wallets) == 0
+
+        trade = Trade(
+            id="trade_track",
+            market_id="m1",
+            market_slug="test",
+            wallet="0xtrackwallet",
+            side="buy",
+            outcome="Yes",
+            amount_usd=6000.0,
+            price=0.5,
+            timestamp=datetime.now(),
+        )
+        detector.analyze_trade(trade)
+
+        assert "0xtrackwallet" in detector.alerted_new_wallets
+
+
+class TestLarkNotificationAmountFallback:
+    """Tests for fix: $0 amount display in Lark notifications for repeat_entry alerts"""
+
+    @patch('polymarket_monitor.requests.post')
+    def test_lark_uses_total_amount_for_repeat_entry(self, mock_post):
+        """Lark notification should use total_amount for repeat_entry alerts"""
+        mock_post.return_value = MagicMock(status_code=200)
+
+        notifier = AlertNotifier(lark_webhook="https://open.larksuite.com/test")
+        alert = Alert(
+            type="repeat_entry",
+            severity="medium",
+            wallet="0xrepeatwallet",
+            market_id="market_1",
+            market_slug="test-market",
+            details={
+                "trade_count": 5,
+                "total_amount": 12345,  # repeat_entry uses total_amount, not amount_usd
+                "window_hours": 24,
+                "message": "🔄 Repeat entry! 5 trades totaling $12,345 in 24 hours"
+            }
+        )
+
+        notifier._send_lark(alert)
+
+        # Verify the request was made
+        assert mock_post.called
+        call_args = mock_post.call_args
+        card = call_args[1]['json']
+
+        # Find the Amount field in the card
+        elements = card['card']['elements']
+        amount_found = False
+        for element in elements:
+            if element.get('tag') == 'div' and 'fields' in element:
+                for field in element['fields']:
+                    content = field.get('text', {}).get('content', '')
+                    if '**Amount**' in content:
+                        amount_found = True
+                        # Should show $12,345, not $0
+                        assert '$12,345' in content, f"Expected $12,345 in content, got: {content}"
+
+        assert amount_found, "Amount field not found in Lark card"
+
+    @patch('polymarket_monitor.requests.post')
+    def test_lark_uses_amount_usd_for_new_wallet(self, mock_post):
+        """Lark notification should use amount_usd for new_wallet alerts"""
+        mock_post.return_value = MagicMock(status_code=200)
+
+        notifier = AlertNotifier(lark_webhook="https://open.larksuite.com/test")
+        alert = Alert(
+            type="new_wallet",
+            severity="critical",
+            wallet="0xnewwallet",
+            market_id="market_1",
+            market_slug="test-market",
+            details={
+                "amount_usd": 8888,  # new_wallet uses amount_usd
+                "outcome": "Yes",
+                "price": 0.65,
+                "wallet_age_trades": 0,
+                "message": "🚨 New wallet large bet! $8,888 on Yes @ 0.65"
+            }
+        )
+
+        notifier._send_lark(alert)
+
+        assert mock_post.called
+        call_args = mock_post.call_args
+        card = call_args[1]['json']
+
+        elements = card['card']['elements']
+        for element in elements:
+            if element.get('tag') == 'div' and 'fields' in element:
+                for field in element['fields']:
+                    content = field.get('text', {}).get('content', '')
+                    if '**Amount**' in content:
+                        assert '$8,888' in content, f"Expected $8,888 in content, got: {content}"
+
+    @patch('polymarket_monitor.requests.post')
+    def test_lark_handles_missing_amount_gracefully(self, mock_post):
+        """Lark notification should show $0 if neither amount_usd nor total_amount exists"""
+        mock_post.return_value = MagicMock(status_code=200)
+
+        notifier = AlertNotifier(lark_webhook="https://open.larksuite.com/test")
+        alert = Alert(
+            type="unknown_type",
+            severity="low",
+            wallet="0xwallet",
+            market_id="market_1",
+            market_slug="test-market",
+            details={
+                "message": "Some alert"
+                # No amount_usd or total_amount
+            }
+        )
+
+        notifier._send_lark(alert)
+
+        assert mock_post.called
+        call_args = mock_post.call_args
+        card = call_args[1]['json']
+
+        elements = card['card']['elements']
+        for element in elements:
+            if element.get('tag') == 'div' and 'fields' in element:
+                for field in element['fields']:
+                    content = field.get('text', {}).get('content', '')
+                    if '**Amount**' in content:
+                        assert '$0' in content, f"Expected $0 in content, got: {content}"
