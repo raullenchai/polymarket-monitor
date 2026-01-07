@@ -576,23 +576,29 @@ class AnomalyDetector:
 # ============ 通知系统 ============
 class AlertNotifier:
     """警报通知"""
-    
-    def __init__(self, webhook_url: str = None, telegram_config: dict = None):
+
+    def __init__(self, webhook_url: str = None, telegram_config: dict = None,
+                 lark_webhook: str = None):
         self.webhook_url = webhook_url
         self.telegram_config = telegram_config
-    
-    def send(self, alert: Alert):
+        self.lark_webhook = lark_webhook
+
+    def send(self, alert: Alert, market_url: str = None):
         """发送警报"""
         # 控制台输出
         self._print_alert(alert)
-        
+
         # Webhook (Discord/Slack等)
         if self.webhook_url:
             self._send_webhook(alert)
-        
+
         # Telegram
         if self.telegram_config:
             self._send_telegram(alert)
+
+        # Lark (飞书)
+        if self.lark_webhook:
+            self._send_lark(alert, market_url)
     
     def _print_alert(self, alert: Alert):
         """控制台打印"""
@@ -659,18 +665,104 @@ class AlertNotifier:
         except Exception as e:
             print(f"[ERROR] Telegram发送失败: {e}")
 
+    def _send_lark(self, alert: Alert, market_url: str = None):
+        """发送到Lark/飞书"""
+        try:
+            # Color based on severity
+            color = {
+                "low": "blue",
+                "medium": "yellow",
+                "high": "orange",
+                "critical": "red"
+            }.get(alert.severity, "blue")
+
+            # Build interactive card
+            card = {
+                "msg_type": "interactive",
+                "card": {
+                    "config": {"wide_screen_mode": True},
+                    "header": {
+                        "title": {
+                            "tag": "plain_text",
+                            "content": f"🚨 {alert.type.upper()} - {alert.severity.upper()}"
+                        },
+                        "template": color
+                    },
+                    "elements": [
+                        {
+                            "tag": "div",
+                            "text": {
+                                "tag": "lark_md",
+                                "content": alert.details.get('message', '')
+                            }
+                        },
+                        {
+                            "tag": "div",
+                            "fields": [
+                                {
+                                    "is_short": True,
+                                    "text": {
+                                        "tag": "lark_md",
+                                        "content": f"**Market**\n{alert.market_slug}"
+                                    }
+                                },
+                                {
+                                    "is_short": True,
+                                    "text": {
+                                        "tag": "lark_md",
+                                        "content": f"**Amount**\n${alert.details.get('amount_usd', 0):,.0f}"
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "tag": "div",
+                            "text": {
+                                "tag": "lark_md",
+                                "content": f"**Wallet**\n`{alert.wallet}`"
+                            }
+                        },
+                        {
+                            "tag": "hr"
+                        },
+                        {
+                            "tag": "action",
+                            "actions": [
+                                {
+                                    "tag": "button",
+                                    "text": {
+                                        "tag": "plain_text",
+                                        "content": "View on Polymarket"
+                                    },
+                                    "type": "primary",
+                                    "url": market_url or f"https://polymarket.com"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+
+            resp = requests.post(self.lark_webhook, json=card, timeout=10)
+            if resp.status_code != 200:
+                print(f"[ERROR] Lark发送失败: {resp.text}")
+        except Exception as e:
+            print(f"[ERROR] Lark发送失败: {e}")
+
+
 # ============ 主监控器 ============
 class PolymarketMonitor:
     """主监控器"""
 
-    def __init__(self, webhook_url: str = None, telegram_config: dict = None):
+    def __init__(self, webhook_url: str = None, telegram_config: dict = None,
+                 lark_webhook: str = None):
         # Shared components
         self.rate_limiter = RateLimiter()
         self.seen_trades_store = SeenTradesStore()
 
         self.client = PolymarketClient(rate_limiter=self.rate_limiter)
         self.detector = AnomalyDetector(self.client, seen_trades_store=self.seen_trades_store)
-        self.notifier = AlertNotifier(webhook_url, telegram_config)
+        self.notifier = AlertNotifier(webhook_url, telegram_config, lark_webhook=lark_webhook)
         self.running = False
         self._poll_count = 0
 
@@ -821,7 +913,7 @@ class PolymarketMonitor:
 
                     # Send notifications
                     for alert in alerts:
-                        self.notifier.send(alert)
+                        self.notifier.send(alert, market_url=market_url)
                 else:
                     # Normal trade - log as INFO with full details
                     trade_logger.info(
@@ -883,6 +975,7 @@ def main():
     parser.add_argument("--webhook", type=str, help="Discord/Slack Webhook URL")
     parser.add_argument("--telegram-token", type=str, help="Telegram Bot Token")
     parser.add_argument("--telegram-chat", type=str, help="Telegram Chat ID")
+    parser.add_argument("--lark-webhook", type=str, help="Lark/Feishu Bot Webhook URL")
     parser.add_argument("--markets", type=str, nargs="+", help="指定监控的市场ID (覆盖 --num-markets)")
     
     args = parser.parse_args()
@@ -908,7 +1001,8 @@ def main():
     # 启动监控
     monitor = PolymarketMonitor(
         webhook_url=args.webhook,
-        telegram_config=telegram_config
+        telegram_config=telegram_config,
+        lark_webhook=args.lark_webhook
     )
     monitor.run(market_ids=args.markets, num_markets=args.num_markets,
                 max_end_days=args.max_days)
