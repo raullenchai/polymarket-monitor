@@ -746,6 +746,13 @@ class AlertNotifier:
                             ]
                         },
                         {
+                            "tag": "div",
+                            "text": {
+                                "tag": "lark_md",
+                                "content": f"**Time:** {alert.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}"
+                            }
+                        },
+                        {
                             "tag": "hr"
                         },
                         {
